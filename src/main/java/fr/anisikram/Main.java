@@ -1,17 +1,22 @@
 package fr.anisikram;
 
 import fr.anisikram.faces.FaceDetector;
-import fr.anisikram.faces.FaceRecognizer;
+import fr.anisikram.faces.FaceRecognizerProcessor;
 import fr.anisikram.video.VideoCapturer;
-import nu.pattern.OpenCV;
+import org.bytedeco.javacpp.Loader;
+import org.bytedeco.javacv.JavaCV;
+import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Rect;
+import org.bytedeco.opencv.opencv_core.Scalar;
+import org.bytedeco.opencv.opencv_core.Point;
+import org.bytedeco.opencv.global.opencv_core;
+import org.bytedeco.opencv.global.opencv_highgui;
+import org.bytedeco.opencv.global.opencv_imgproc;
 import org.opencv.core.Core;
-import org.opencv.core.Mat;
-import org.opencv.core.Rect;
-import org.opencv.highgui.HighGui;
-import org.opencv.imgproc.Imgproc;
-import org.opencv.core.Scalar;
-import org.opencv.core.Point;
 
+import static org.bytedeco.opencv.global.opencv_core.*;
+
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Scanner;
 
@@ -20,9 +25,18 @@ import java.util.Scanner;
  * et la capture vidéo.
  */
 public class Main {
+
+    static {
+        System.setProperty("org.bytedeco.javacpp.logger.debug", "true");
+        System.setProperty("org.bytedeco.javacpp.nopointergc", "true");
+        System.out.println("JavaCV version: " + JavaCV.class.getPackage().getImplementationVersion());
+    }
     public static void main(String[] args) {
+        // Get configuration manager instance
+        ConfigurationManager config = ConfigurationManager.getInstance();
+
         // Option pour activer/désactiver la synthèse vocale
-        boolean enableSpeech = true; // Activée par défaut
+        boolean enableSpeech = config.get("voice.enabled"); // Get from configuration
 
         // Traitement des arguments en ligne de commande
         for (String arg : args) {
@@ -40,16 +54,15 @@ public class Main {
 
         try {
             System.out.println("Initialisation du système de reconnaissance faciale...");
-            OpenCV.loadLocally();
-            System.out.println("Bibliothèque OpenCV chargée avec succès : " + Core.VERSION);
         } catch (UnsatisfiedLinkError e) {
-            System.err.println("Impossible de charger la bibliothèque native OpenCV :");
+            System.err.println("Impossible de charger la bibliothèque native OpenCV bla bla:");
             System.err.println(e.getMessage());
             System.exit(1);
         }
 
-        // Initialisation de la capture vidéo
-        VideoCapturer videoCapturer = new VideoCapturer(0);
+        // Initialisation de la capture vidéo avec l'index de caméra depuis la configuration
+        int cameraIndex = config.get("video.camera.index");
+        VideoCapturer videoCapturer = new VideoCapturer(cameraIndex);
 
         if (!videoCapturer.isOpened()) {
             System.err.println("Impossible d'ouvrir la caméra. Vérifiez les connexions et les permissions.");
@@ -59,19 +72,25 @@ public class Main {
         // Initialisation du détecteur de visages
         FaceDetector faceDetector = new FaceDetector();
 
-        // Initialisation du reconnaisseur de visages avec le modèle pré-entraîné
-        // Note: Remplacez le chemin par l'emplacement de votre modèle
-        FaceRecognizer faceRecognizer = new FaceRecognizer("models/face_recognition_sface_2021dec.onnx");
+        // Initialisation du reconnaisseur de visages avec le modèle pré-entraîné depuis la configuration
+        String modelPath = config.get("face.model.path");
+        FaceRecognizerProcessor faceRecognizerProcessor = new FaceRecognizerProcessor(modelPath);
 
-        // Initialisation avec l'option d'activation/désactivation
-        VoiceSynthesizer voiceSynthesizer = new VoiceSynthesizer(10000, enableSpeech);
+        // Initialisation avec l'option d'activation/désactivation et le temps de cooldown depuis la configuration
+        long cooldownTime = config.get("voice.cooldown");
+        VoiceSynthesizer voiceSynthesizer = new VoiceSynthesizer(cooldownTime, enableSpeech);
         boolean speechEnabled = enableSpeech && voiceSynthesizer.initialize();
 
         if (speechEnabled) {
             System.out.println("Synthèse vocale initialisée avec succès.");
-            voiceSynthesizer.setPitch(1f);  // Ajustement du ton
-            voiceSynthesizer.setRate(1f);   // Ajustement de la vitesse
-            voiceSynthesizer.setVolume(1f);
+            // Utiliser les paramètres de voix depuis la configuration
+            float pitch = ((Double) config.get("voice.pitch")).floatValue();
+            float rate = ((Double) config.get("voice.rate")).floatValue();
+            float volume = 1f; // Volume standard
+
+            voiceSynthesizer.setPitch(pitch);
+            voiceSynthesizer.setRate(rate);
+            voiceSynthesizer.setVolume(volume);
         } else {
             System.out.println("La synthèse vocale n'est pas disponible ou est désactivée.");
         }
@@ -108,24 +127,24 @@ public class Main {
                         if (addingFace) {
                             // Mode ajout de visage
                             // Affichage d'un message sur l'image
-                            Imgproc.putText(frame, "Ajout de " + currentName + "...",
-                                    new Point(face.x, face.y - 10),
-                                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
-                                    new Scalar(0, 255, 0), 2);
+                            opencv_imgproc.putText(frame, "Ajout de " + currentName + "...",
+                                    new Point(face.x(), face.y() - 10),
+                                    opencv_imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
+                                    new Scalar(0, 255, 0, 0), 2, opencv_imgproc.LINE_AA, false);
                         } else {
                             // Mode reconnaissance
                             // Reconnaissance du visage
-                            String personName = faceRecognizer.recognize(faceMat);
+                            String personName = faceRecognizerProcessor.recognize(faceMat);
 
                             // Affichage du nom reconnu sur l'image
                             Scalar textColor = personName.equals("Inconnu") ?
-                                    new Scalar(0, 0, 255) : // Rouge pour inconnu
-                                    new Scalar(0, 255, 0);  // Vert pour reconnu
+                                    new Scalar(0, 0, 255, 0) : // Rouge pour inconnu
+                                    new Scalar(0, 255, 0, 0);  // Vert pour reconnu
 
-                            Imgproc.putText(frame, personName,
-                                    new Point(face.x, face.y - 10),
-                                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
-                                    textColor, 2);
+                            opencv_imgproc.putText(frame, personName,
+                                    new Point(face.x(), face.y() - 10),
+                                    opencv_imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
+                                    textColor, 2, opencv_imgproc.LINE_AA, false);
 
                             if (speechEnabled && !personName.equals("Inconnu") && !personName.equals("Erreur")) {
                                 voiceSynthesizer.greet(personName);
@@ -140,10 +159,10 @@ public class Main {
                 faceDetector.drawFaceRectangles(frame, faces);
 
                 // Affichage de l'image
-                HighGui.imshow("Reconnaissance Faciale", frame);
+                opencv_highgui.imshow("Reconnaissance Faciale", frame);
 
                 // Gestion des touches clavier
-                int key = HighGui.waitKey(30);
+                int key = opencv_highgui.waitKey(30) & 0xFF;
 
                 // Touche Échap pour quitter
                 if (key == 27) {
@@ -169,7 +188,7 @@ public class Main {
                         Mat faceMat = faceDetector.extractFace(frame, faces.get(0), true);
 
                         if (!faceMat.empty()) {
-                            boolean success = faceRecognizer.addFace(faceMat, currentName);
+                            boolean success = faceRecognizerProcessor.addFace(faceMat, currentName);
 
                             if (success) {
                                 System.out.println("Visage de '" + currentName + "' ajouté avec succès !");
@@ -192,7 +211,7 @@ public class Main {
                     String filename = scanner.nextLine().trim();
 
                     if (!filename.isEmpty()) {
-                        boolean success = faceRecognizer.saveDatabase(filename);
+                        boolean success = faceRecognizerProcessor.saveDatabase(filename);
 
                         if (success) {
                             System.out.println("Base de données sauvegardée avec succès dans '" + filename + "'.");
@@ -207,7 +226,7 @@ public class Main {
                     String filename = scanner.nextLine().trim();
 
                     if (!filename.isEmpty()) {
-                        boolean success = faceRecognizer.loadDatabase(filename);
+                        boolean success = faceRecognizerProcessor.loadDatabase(filename);
 
                         if (success) {
                             System.out.println("Base de données chargée avec succès depuis '" + filename + "'.");
@@ -241,11 +260,11 @@ public class Main {
         // Nettoyage et libération des ressources
         scanner.close();
         videoCapturer.close();
-        faceRecognizer.release();
+        faceRecognizerProcessor.release();
         if (voiceSynthesizer.isInitialized()) {
             voiceSynthesizer.release();
         }
-        HighGui.destroyAllWindows();
+        opencv_highgui.destroyAllWindows();
         System.out.println("Programme terminé.");
     }
 }

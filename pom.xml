@@ -14,10 +14,11 @@
     </properties>
 
     <dependencies>
+        <!-- JavaCV dependencies -->
         <dependency>
-            <groupId>org.openpnp</groupId>
-            <artifactId>opencv</artifactId>
-            <version>4.9.0-0</version>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>javacv-platform</artifactId>
+            <version>1.5.11</version>
         </dependency>
 
         <!-- Google Cloud Text-to-Speech API -->

@@ -1,39 +1,37 @@
 package fr.anisikram.faces;
 
-import org.opencv.core.*;
-import org.opencv.imgcodecs.Imgcodecs;
-import org.opencv.imgproc.Imgproc;
-import org.opencv.objdetect.FaceRecognizerSF;
+import org.bytedeco.javacpp.FloatPointer;
+import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Size;
+import org.bytedeco.opencv.opencv_objdetect.FaceRecognizerSF;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Classe permettant de reconnaître des visages à l'aide de FaceRecognizerSF d'OpenCV.
- * La classe peut être utilisée pour enregistrer des visages connus et les reconnaître ultérieurement.
- */
-public class FaceRecognizer {
+import static org.bytedeco.opencv.global.opencv_core.CV_32F;
+import static org.bytedeco.opencv.global.opencv_imgproc.COLOR_GRAY2BGR;
+import static org.bytedeco.opencv.global.opencv_imgproc.cvtColor;
+import static org.bytedeco.opencv.global.opencv_imgproc.resize;
 
-    // Le modèle de reconnaissance faciale FaceRecognizerSF
+public class FaceRecognizerProcessor {
+
     private FaceRecognizerSF faceRecognizer;
 
-    // Seuil de confiance pour la reconnaissance (entre 0 et 1)
     private float confidenceThreshold;
 
-    // Base de données des caractéristiques faciales connues
     private final List<Mat> faceFeatures;
 
-    // Noms associés aux visages connus (même index que faceFeatures)
     private List<String> faceNames;
 
-    /**
-     * Constructeur initialisant le modèle de reconnaissance faciale.
-     *
-     * @param modelPath Chemin vers le fichier du modèle FaceRecognizerSF préentraîné
-     * @param configPath Chemin vers le fichier de configuration (peut être vide)
-     * @param threshold Seuil de confiance pour la reconnaissance (0.4 par défaut)
-     */
-    public FaceRecognizer(String modelPath, String configPath, float threshold) {
+    public FaceRecognizerProcessor(String modelPath, String configPath, float threshold) {
         // Initialisation du modèle FaceRecognizerSF
         this.faceRecognizer = FaceRecognizerSF.create(modelPath, configPath);
         this.confidenceThreshold = threshold;
@@ -45,22 +43,11 @@ public class FaceRecognizer {
         System.out.println("FaceRecognizer initialisé avec succès.");
     }
 
-    /**
-     * Constructeur avec valeurs par défaut.
-     *
-     * @param modelPath Chemin vers le fichier du modèle
-     */
-    public FaceRecognizer(String modelPath) {
+
+    public FaceRecognizerProcessor(String modelPath) {
         this(modelPath, "", 0.6f);
     }
 
-    /**
-     * Ajoute un visage à la base de données des visages connus.
-     *
-     * @param faceImage Image Mat contenant un visage aligné
-     * @param personName Nom de la personne
-     * @return true si l'ajout a réussi, false sinon
-     */
     public boolean addFace(Mat faceImage, String personName) {
         if (faceImage.empty()) {
             System.err.println("L'image du visage est vide.");
@@ -87,12 +74,7 @@ public class FaceRecognizer {
         }
     }
 
-    /**
-     * Reconnaît un visage à partir d'une image.
-     *
-     * @param faceImage Image Mat contenant un visage aligné
-     * @return Le nom de la personne reconnue ou "Inconnu" si le visage n'est pas reconnu
-     */
+
     public String recognize(Mat faceImage) {
         if (faceImage.empty()) {
             System.err.println("L'image du visage est vide.");
@@ -119,7 +101,8 @@ public class FaceRecognizer {
             // Comparaison avec tous les visages connus
             for (int i = 0; i < faceFeatures.size(); i++) {
                 // Calcul de la similarité cosinus entre les caractéristiques
-                double similarity = faceRecognizer.match(queryFeature, faceFeatures.get(i), FaceRecognizerSF.FR_COSINE);
+                double similarity = faceRecognizer.match(queryFeature, faceFeatures.get(i), 
+                                                        FaceRecognizerSF.FR_COSINE);
 
                 // Si la similarité est supérieure au meilleur match actuel, on met à jour
                 if (similarity > bestMatch) {
@@ -143,55 +126,15 @@ public class FaceRecognizer {
         }
     }
 
-    /**
-     * Prétraite une image de visage pour la reconnaissance.
-     *
-     * @param faceImage Image Mat contenant un visage
-     * @return Image Mat prétraitée
-     */
     private Mat preprocessFace(Mat faceImage) {
         Mat processedFace = new Mat();
+        resize(faceImage, processedFace, new Size(224, 224));
 
-        // Amélioration du contraste avant traitement
-        Mat enhanced = new Mat();
-        Core.normalize(faceImage, enhanced, 0, 255, Core.NORM_MINMAX);
-
-        // Réduction du bruit
-        Mat denoised = new Mat();
-        Imgproc.GaussianBlur(enhanced, denoised, new Size(3, 3), 0);
-
-        // Redimensionnement si nécessaire (certains modèles nécessitent une taille spécifique)
-        if (faceImage.rows() != 224 || faceImage.cols() != 224) {
-            Imgproc.resize(faceImage, processedFace, new Size(224, 224));
-        } else {
-            faceImage.copyTo(processedFace);
-        }
-
-        // Conversion en BGR si l'image est en niveaux de gris
         if (processedFace.channels() == 1) {
-            Imgproc.cvtColor(processedFace, processedFace, Imgproc.COLOR_GRAY2BGR);
+            cvtColor(processedFace, processedFace, COLOR_GRAY2BGR);
         }
 
-        // Normalisation d'histogramme pour améliorer le contraste
-        if (processedFace.channels() == 1) {
-            Imgproc.equalizeHist(processedFace, processedFace);
-            Imgproc.cvtColor(processedFace, processedFace, Imgproc.COLOR_GRAY2BGR);
-        } else {
-            // Conversion en YUV pour égaliser uniquement la luminance
-            Mat yuv = new Mat();
-            Imgproc.cvtColor(processedFace, yuv, Imgproc.COLOR_BGR2YUV);
-            List<Mat> channels = new ArrayList<>();
-            Core.split(yuv, channels);
-            Imgproc.equalizeHist(channels.getFirst(), channels.getFirst());
-            Core.merge(channels, yuv);
-            Imgproc.cvtColor(yuv, processedFace, Imgproc.COLOR_YUV2BGR);
-        }
-
-        // Normalisation finale
-        Mat normalized = new Mat();
-        processedFace.convertTo(normalized, CvType.CV_32F, 1.0/255);
-
-        return normalized;
+        return processedFace;
     }
 
     /**
@@ -208,28 +151,31 @@ public class FaceRecognizer {
             }
 
             // Préparation du dossier de destination si nécessaire
-            java.nio.file.Path path = java.nio.file.Paths.get(filePath);
-            java.nio.file.Files.createDirectories(path.getParent());
+            Path path = Paths.get(filePath);
+            Files.createDirectories(path.getParent());
 
             // Structure pour stocker toutes les caractéristiques
             List<float[]> allFeatures = new ArrayList<>();
 
             // Extraction des caractéristiques de chaque visage
             for (Mat feature : faceFeatures) {
-                float[] featureArray = new float[(int) feature.total()];
-                feature.get(0, 0, featureArray);
-                allFeatures.add(featureArray);
+                int size = (int) feature.total();
+                float[] featureArray = new float[size];
+                try (FloatPointer floatPointer = new FloatPointer(size)) {
+                    feature.data().put(floatPointer);
+                    floatPointer.get(featureArray);
+                    allFeatures.add(featureArray);
+                }
             }
 
             // Sauvegarde des caractéristiques en binaire
-            try (java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(
-                    new java.io.FileOutputStream(filePath + ".features"))) {
+            try (ObjectOutputStream oos = new ObjectOutputStream(
+                    new FileOutputStream(filePath + ".features"))) {
                 oos.writeObject(allFeatures);
             }
 
             // Sauvegarde des noms
-            java.nio.file.Files.write(java.nio.file.Paths.get(filePath + ".names"),
-                    String.join("\n", faceNames).getBytes());
+            Files.write(Paths.get(filePath + ".names"), String.join("\n", faceNames).getBytes());
 
             System.out.println("Base de données sauvegardée avec succès dans : " + filePath);
             return true;
@@ -248,25 +194,23 @@ public class FaceRecognizer {
      */
     public boolean loadDatabase(String filePath) {
         try {
-
-
             // Vérification de l'existence des fichiers
-            java.io.File featuresFile = new java.io.File(filePath + ".features");
-            java.io.File namesFile = new java.io.File(filePath + ".names");
+            File featuresFile = new File(filePath + ".features");
+            File namesFile = new File(filePath + ".names");
 
             if (!featuresFile.exists() || !namesFile.exists()) {
                 System.err.println("Fichiers de base de données introuvables: " + filePath);
                 return false;
             }
             // Chargement des noms
-            String namesContent = new String(java.nio.file.Files.readAllBytes(
-                    java.nio.file.Paths.get(filePath + ".names")));
+            String namesContent = new String(Files.readAllBytes(
+                    Paths.get(filePath + ".names")));
             String[] names = namesContent.split("\n");
 
             // Chargement des caractéristiques
             List<float[]> loadedFeatures;
-            try (java.io.ObjectInputStream ois = new java.io.ObjectInputStream(
-                    new java.io.FileInputStream(filePath + ".features"))) {
+            try (ObjectInputStream ois = new ObjectInputStream(
+                    new FileInputStream(filePath + ".features"))) {
                 loadedFeatures = (List<float[]>) ois.readObject();
             }
 
@@ -279,17 +223,23 @@ public class FaceRecognizer {
             }
 
             // Réinitialisation des listes
+            for (Mat feature : faceFeatures) {
+                if (feature != null && !feature.isNull()) {
+                    feature.close();
+                }
+            }
             faceFeatures.clear();
             faceNames.clear();
 
             // Reconstruction des caractéristiques individuelles et des noms
             for (int i = 0; i < loadedFeatures.size(); i++) {
                 float[] featureArray = loadedFeatures.get(i);
-                Mat feature = new Mat(1, featureArray.length, CvType.CV_32F);
-                feature.put(0, 0, featureArray);
-
-                faceFeatures.add(feature);
-                faceNames.add(names[i]);
+                Mat feature = new Mat(1, featureArray.length, CV_32F);
+                try(FloatPointer floatPointer = new FloatPointer(featureArray)) {
+                    feature.data().put(floatPointer);
+                    faceFeatures.add(feature);
+                    faceNames.add(names[i]);
+                }
             }
 
             System.out.println(loadedFeatures.size() + " visages chargés dans la base de données.");
@@ -300,25 +250,20 @@ public class FaceRecognizer {
             return false;
         } catch (Exception e) {
             System.err.println("Erreur lors du chargement de la base de données: " + e.getMessage());
-            e.printStackTrace(); // Affichage de la trace complète pour débogage
+            e.printStackTrace();
             return false;
         }
     }
 
-    /**
-     * Libère les ressources utilisées par la classe.
-     */
     public void release() {
-        // Libération des ressources OpenCV
-
-        // Libération des caractéristiques faciales
+        faceRecognizer.close();
         for (Mat feature : faceFeatures) {
-            feature.release();
+            if (feature != null && !feature.isNull()) {
+                feature.close();
+            }
         }
-
         faceFeatures.clear();
         faceNames.clear();
-
         System.out.println("Ressources libérées.");
     }
 }

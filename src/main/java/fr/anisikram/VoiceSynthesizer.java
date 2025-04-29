@@ -29,15 +29,14 @@ public class VoiceSynthesizer {
     private boolean initialized;
     private boolean enabled;
 
-    // Voix françaises disponibles sur Google TTS
-    private static final String DEFAULT_VOICE = "fr-FR-Wavenet-C"; // Voix française masculine
-    private static final String ALTERNATIVE_VOICE = "fr-FR-Wavenet-B"; // Voix française féminine alternative
-    
+    // Configuration manager
+    private final ConfigurationManager config = ConfigurationManager.getInstance();
+
     // Paramètres de la voix
-    private double pitch = 0.0; // Valeur par défaut (entre -20.0 et 20.0)
-    private double speakingRate = 1.0; // Valeur par défaut (entre 0.25 et 4.0)
-    private double volume = 0.0; // Valeur par défaut (entre -96.0 et 16.0)
-    private String currentVoice = DEFAULT_VOICE;
+    private double pitch;
+    private double speakingRate;
+    private double volume;
+    private String currentVoice;
 
     public VoiceSynthesizer() {
         this(10000, true); // 10 secondes par défaut, activé par défaut
@@ -52,6 +51,12 @@ public class VoiceSynthesizer {
         this.greetingCooldown = cooldownMs;
         this.initialized = false;
         this.enabled = enabled;
+
+        // Initialize voice parameters from configuration
+        this.pitch = config.get("voice.pitch");
+        this.speakingRate = config.get("voice.rate");
+        this.volume = config.get("voice.volume");
+        this.currentVoice = config.get("voice.default");
     }
 
     public boolean initialize() {
@@ -60,14 +65,17 @@ public class VoiceSynthesizer {
         }
 
         try {
+            // Get API key from configuration
+            String apiKey = config.get("google.api.key");
+
             var textToSpeechClientSettings = TextToSpeechSettings.newBuilder()
-                    .setCredentialsProvider(FixedCredentialsProvider.create(GoogleCloudApiKeyCredentials.createCredentialsFromApiKey("")))
+                    .setCredentialsProvider(FixedCredentialsProvider.create(GoogleCloudApiKeyCredentials.createCredentialsFromApiKey(apiKey)))
                     .build();
 
             this.textToSpeechClient = TextToSpeechClient.create(textToSpeechClientSettings);
             System.out.println("Google Text-to-Speech API initialisée avec succès");
             System.out.println("Voix française sélectionnée: " + currentVoice);
-            
+
             this.initialized = true;
             return true;
         } catch (IOException e) {
@@ -101,7 +109,7 @@ public class VoiceSynthesizer {
         }
 
         lastGreetingTime.put(name, currentTime);
-        
+
         String greeting = "Bonjour " + name;
         speak(greeting);
     }
@@ -142,7 +150,7 @@ public class VoiceSynthesizer {
             }
         }
     }
-    
+
     // Méthode utilitaire pour parler un texte quelconque
     public void speak(String text) {
         if (!initialized || text == null || text.isEmpty() || textToSpeechClient == null) {
@@ -152,13 +160,13 @@ public class VoiceSynthesizer {
         try {
             // Configurer la requête TTS
             SynthesisInput input = SynthesisInput.newBuilder().setText(text).build();
-            
+
             // Configurer la voix
             VoiceSelectionParams voice = VoiceSelectionParams.newBuilder()
                 .setLanguageCode("fr-FR")
                 .setName(currentVoice)
                 .build();
-            
+
             // Configurer les paramètres audio
             AudioConfig audioConfig = AudioConfig.newBuilder()
                 .setAudioEncoding(AudioEncoding.LINEAR16)
@@ -166,62 +174,62 @@ public class VoiceSynthesizer {
                 .setSpeakingRate(speakingRate)
                 .setVolumeGainDb((float)volume)
                 .build();
-            
+
             // Effectuer la requête de synthèse
             SynthesizeSpeechResponse response = textToSpeechClient.synthesizeSpeech(input, voice, audioConfig);
             ByteString audioContent = response.getAudioContent();
-            
+
             // Jouer l'audio
             playAudio(audioContent.toByteArray());
-            
+
         } catch (Exception e) {
             System.err.println("Erreur lors de la synthèse vocale: " + e.getMessage());
         }
     }
-    
+
     // Méthode pour changer de voix
     public void setVoice(String voiceName) {
         if (voiceName != null && !voiceName.isEmpty()) {
             this.currentVoice = voiceName;
         }
     }
-    
+
     // Utiliser la voix masculine par défaut
     public void useDefaultVoice() {
-        this.currentVoice = DEFAULT_VOICE;
+        this.currentVoice = config.get("voice.default");
     }
-    
+
     // Utiliser la voix féminine alternative
     public void useAlternativeVoice() {
-        this.currentVoice = ALTERNATIVE_VOICE;
+        this.currentVoice = config.get("voice.alternative");
     }
-    
+
     // Méthode privée pour jouer l'audio reçu
     private void playAudio(byte[] audioData) throws UnsupportedAudioFileException, IOException, LineUnavailableException {
         // Convertir les bytes en InputStream
         ByteArrayInputStream bais = new ByteArrayInputStream(audioData);
-        
+
         // Obtenir l'AudioInputStream
         AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(bais);
-        
+
         // Obtenir le format audio
         AudioFormat audioFormat = audioInputStream.getFormat();
-        
+
         // Obtenir une ligne audio
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, audioFormat);
         SourceDataLine audioLine = (SourceDataLine) AudioSystem.getLine(info);
-        
+
         // Ouvrir et démarrer la ligne audio
         audioLine.open(audioFormat);
         audioLine.start();
-        
+
         // Lire les données audio
         byte[] buffer = new byte[4096];
         int bytesRead = 0;
         while ((bytesRead = audioInputStream.read(buffer)) != -1) {
             audioLine.write(buffer, 0, bytesRead);
         }
-        
+
         // Fermer les ressources
         audioLine.drain();
         audioLine.close();
