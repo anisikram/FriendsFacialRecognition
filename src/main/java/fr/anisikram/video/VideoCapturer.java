@@ -1,10 +1,8 @@
 package fr.anisikram.video;
 
-import nu.pattern.OpenCV;
-import org.opencv.core.Core;
-import org.opencv.core.Mat;
-import org.opencv.videoio.VideoCapture;
-import org.opencv.videoio.Videoio;
+import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_videoio.VideoCapture;
+import org.bytedeco.opencv.global.opencv_videoio;
 
 import java.util.Objects;
 
@@ -32,13 +30,20 @@ public class VideoCapturer {
         }
 
         // Configurer la résolution de capture (640x480 est une résolution standard bien supportée)
-        camera.set(Videoio.CAP_PROP_FRAME_WIDTH, 1280);
-        camera.set(Videoio.CAP_PROP_FRAME_HEIGHT, 720);
+        camera.set(opencv_videoio.CAP_PROP_FRAME_WIDTH, 1280);
+        camera.set(opencv_videoio.CAP_PROP_FRAME_HEIGHT, 720);
 
         opened = true;
         System.out.println("Caméra initialisée avec succès (ID: " + deviceId + ")");
     }
 
+    /**
+     * Captures a frame from the camera.
+     *
+     * @return A new Mat object containing the frame. The caller is responsible for
+     *         calling .close() on this Mat to release native memory.
+     *         Returns null if the camera is not opened or if the frame is empty.
+     */
     public Mat getFrame() {
         if (!opened) {
             System.err.println("ERREUR : La caméra n'est pas ouverte.");

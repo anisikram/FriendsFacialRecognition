@@ -3,14 +3,13 @@ package fr.anisikram;
 import fr.anisikram.faces.FaceDetector;
 import fr.anisikram.faces.FaceRecognizer;
 import fr.anisikram.video.VideoCapturer;
-import nu.pattern.OpenCV;
-import org.opencv.core.Core;
-import org.opencv.core.Mat;
-import org.opencv.core.Rect;
-import org.opencv.highgui.HighGui;
-import org.opencv.imgproc.Imgproc;
-import org.opencv.core.Scalar;
-import org.opencv.core.Point;
+import org.bytedeco.opencv.global.opencv_core;
+import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Rect;
+import org.bytedeco.opencv.global.opencv_highgui;
+import org.bytedeco.opencv.global.opencv_imgproc;
+import org.bytedeco.opencv.opencv_core.Scalar;
+import org.bytedeco.opencv.opencv_core.Point;
 
 import java.util.List;
 import java.util.Scanner;
@@ -38,15 +37,10 @@ public class Main {
             }
         }
 
-        try {
-            System.out.println("Initialisation du système de reconnaissance faciale...");
-            OpenCV.loadLocally();
-            System.out.println("Bibliothèque OpenCV chargée avec succès : " + Core.VERSION);
-        } catch (UnsatisfiedLinkError e) {
-            System.err.println("Impossible de charger la bibliothèque native OpenCV :");
-            System.err.println(e.getMessage());
-            System.exit(1);
-        }
+        System.out.println("Initialisation du système de reconnaissance faciale...");
+        // OpenCV.loadLocally(); // Removed
+        System.out.println("Version de OpenCV (JavaCV): " + org.bytedeco.opencv.global.opencv_core.CV_VERSION);
+
 
         // Initialisation de la capture vidéo
         VideoCapturer videoCapturer = new VideoCapturer(0);
@@ -93,101 +87,97 @@ public class Main {
         // Boucle principale
         while (proceed) {
             // Capture d'une image depuis la caméra
-            Mat frame = videoCapturer.getFrame();
+            try (Mat frame = videoCapturer.getFrame()) {
+                if (frame != null && !frame.empty()) {
+                    // Détection des visages dans l'image
+                    List<Rect> faces = faceDetector.detectFaces(frame);
 
-            if (frame != null && !frame.empty()) {
-                // Détection des visages dans l'image
-                List<Rect> faces = faceDetector.detectFaces(frame);
+                    // Traitement des visages détectés
+                    for (Rect face : faces) {
+                        // Extraction du visage depuis l'image
+                        try (Mat faceMat = faceDetector.extractFace(frame, face, true)) {
+                            if (faceMat != null && !faceMat.empty()) {
+                                if (addingFace) {
+                                    // Mode ajout de visage
+                                    // Affichage d'un message sur l'image
+                                    opencv_imgproc.putText(frame, "Ajout de " + currentName + "...",
+                                            new Point(face.x(), face.y() - 10), // Use accessors for Rect
+                                            opencv_imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
+                                            new Scalar(0, 255, 0, 0), 2); // Added alpha for Scalar
+                                } else {
+                                    // Mode reconnaissance
+                                    // Reconnaissance du visage
+                                    String personName = faceRecognizer.recognize(faceMat);
 
-                // Traitement des visages détectés
-                for (Rect face : faces) {
-                    // Extraction du visage depuis l'image
-                    Mat faceMat = faceDetector.extractFace(frame, face, true);
+                                    // Affichage du nom reconnu sur l'image
+                                    Scalar textColor = personName.equals("Inconnu") ?
+                                            new Scalar(0, 0, 255, 0) : // Rouge pour inconnu
+                                            new Scalar(0, 255, 0, 0);  // Vert pour reconnu
 
-                    if (!faceMat.empty()) {
-                        if (addingFace) {
-                            // Mode ajout de visage
-                            // Affichage d'un message sur l'image
-                            Imgproc.putText(frame, "Ajout de " + currentName + "...",
-                                    new Point(face.x, face.y - 10),
-                                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
-                                    new Scalar(0, 255, 0), 2);
+                                    opencv_imgproc.putText(frame, personName,
+                                            new Point(face.x(), face.y() - 10), // Use accessors for Rect
+                                            opencv_imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
+                                            textColor, 2);
+
+                                    if (speechEnabled && !personName.equals("Inconnu") && !personName.equals("Erreur")) {
+                                        voiceSynthesizer.greet(personName);
+                                    }
+                                }
+                                // faceMat.release(); // Removed, handled by try-with-resources
+                            }
+                        }
+                    }
+
+                    // Dessin des rectangles autour des visages
+                    faceDetector.drawFaceRectangles(frame, faces);
+
+                    // Affichage de l'image
+                    opencv_highgui.imshow("Reconnaissance Faciale", frame);
+
+                    // Gestion des touches clavier
+                    int key = opencv_highgui.waitKey(30);
+
+                    // Touche Échap pour quitter
+                    if (key == 27) {
+                        proceed = false;
+                    }
+                    // Touche 'a' ou 'A' pour ajouter un visage
+                    else if (key == 'a' || key == 'A') {
+                        if (!faces.isEmpty() && !addingFace) {
+                            System.out.print("Entrez le nom de la personne : ");
+                            currentName = scanner.nextLine().trim();
+
+                            if (!currentName.isEmpty()) {
+                                addingFace = true;
+                                System.out.println("Positionnez votre visage et appuyez sur ESPACE pour confirmer l'ajout...");
+                            }
+                        } else if (faces.isEmpty()) {
+                            System.out.println("Aucun visage détecté. Veuillez vous positionner face à la caméra.");
+                        }
+                    }
+                    // Touche ESPACE pour confirmer l'ajout d'un visage
+                    else if (key == 32 && addingFace) { // Code ASCII de l'espace
+                        if (!faces.isEmpty()) {
+                            try (Mat faceMat = faceDetector.extractFace(frame, faces.get(0), true)) {
+                                if (faceMat != null && !faceMat.empty()) {
+                                    boolean success = faceRecognizer.addFace(faceMat, currentName);
+
+                                    if (success) {
+                                        System.out.println("Visage de '" + currentName + "' ajouté avec succès !");
+                                    } else {
+                                        System.out.println("Échec de l'ajout du visage.");
+                                    }
+                                    // faceMat.release(); // Removed, handled by try-with-resources
+                                }
+                            }
+                            addingFace = false;
+                            currentName = "";
                         } else {
-                            // Mode reconnaissance
-                            // Reconnaissance du visage
-                            String personName = faceRecognizer.recognize(faceMat);
-
-                            // Affichage du nom reconnu sur l'image
-                            Scalar textColor = personName.equals("Inconnu") ?
-                                    new Scalar(0, 0, 255) : // Rouge pour inconnu
-                                    new Scalar(0, 255, 0);  // Vert pour reconnu
-
-                            Imgproc.putText(frame, personName,
-                                    new Point(face.x, face.y - 10),
-                                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.8,
-                                    textColor, 2);
-
-                            if (speechEnabled && !personName.equals("Inconnu") && !personName.equals("Erreur")) {
-                                voiceSynthesizer.greet(personName);
-                            }
+                            System.out.println("Aucun visage détecté. Veuillez vous positionner face à la caméra.");
                         }
-
-                        faceMat.release(); // Libération de la mémoire
                     }
-                }
-
-                // Dessin des rectangles autour des visages
-                faceDetector.drawFaceRectangles(frame, faces);
-
-                // Affichage de l'image
-                HighGui.imshow("Reconnaissance Faciale", frame);
-
-                // Gestion des touches clavier
-                int key = HighGui.waitKey(30);
-
-                // Touche Échap pour quitter
-                if (key == 27) {
-                    proceed = false;
-                }
-                // Touche 'a' ou 'A' pour ajouter un visage
-                else if (key == 'a' || key == 'A') {
-                    if (!faces.isEmpty() && !addingFace) {
-                        System.out.print("Entrez le nom de la personne : ");
-                        currentName = scanner.nextLine().trim();
-
-                        if (!currentName.isEmpty()) {
-                            addingFace = true;
-                            System.out.println("Positionnez votre visage et appuyez sur ESPACE pour confirmer l'ajout...");
-                        }
-                    } else if (faces.isEmpty()) {
-                        System.out.println("Aucun visage détecté. Veuillez vous positionner face à la caméra.");
-                    }
-                }
-                // Touche ESPACE pour confirmer l'ajout d'un visage
-                else if (key == 32 && addingFace) { // Code ASCII de l'espace
-                    if (!faces.isEmpty()) {
-                        Mat faceMat = faceDetector.extractFace(frame, faces.get(0), true);
-
-                        if (!faceMat.empty()) {
-                            boolean success = faceRecognizer.addFace(faceMat, currentName);
-
-                            if (success) {
-                                System.out.println("Visage de '" + currentName + "' ajouté avec succès !");
-                            } else {
-                                System.out.println("Échec de l'ajout du visage.");
-                            }
-
-                            faceMat.release();
-                        }
-
-                        addingFace = false;
-                        currentName = "";
-                    } else {
-                        System.out.println("Aucun visage détecté. Veuillez vous positionner face à la caméra.");
-                    }
-                }
-                // Touche 's' ou 'S' pour sauvegarder la base de données
-                else if (key == 's' || key == 'S') {
+                    // Touche 's' ou 'S' pour sauvegarder la base de données
+                    else if (key == 's' || key == 'S') {
                     System.out.print("Entrez le nom du fichier pour la sauvegarde : ");
                     String filename = scanner.nextLine().trim();
 
@@ -245,7 +235,7 @@ public class Main {
         if (voiceSynthesizer.isInitialized()) {
             voiceSynthesizer.release();
         }
-        HighGui.destroyAllWindows();
+        opencv_highgui.destroyAllWindows();
         System.out.println("Programme terminé.");
     }
 }

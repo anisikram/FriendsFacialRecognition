@@ -1,8 +1,9 @@
 package fr.anisikram.faces;
 
-import org.opencv.core.*;
-import org.opencv.imgproc.Imgproc;
-import org.opencv.objdetect.CascadeClassifier;
+import org.bytedeco.opencv.global.opencv_imgproc;
+import org.bytedeco.opencv.opencv_core.*;
+import org.bytedeco.opencv.opencv_objdetect.CascadeClassifier;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -15,7 +16,7 @@ public class FaceDetector {
     private final double scaleFactor = 1.1;
     private final int minNeighbors = 3;
     private final Size minFaceSize = new Size(80, 80);
-    private final Size maxFaceSize = new Size();
+    private final Size maxFaceSize = new Size(); // Represents no maximum size limit
 
     public FaceDetector(String classifierPath) {
         faceDetector = new CascadeClassifier();
@@ -53,7 +54,7 @@ public class FaceDetector {
                 return null;
             }
             String fileName = resourcePath.substring(resourcePath.lastIndexOf('/') + 1);
-            File tempFile = File.createTempFile("opencv_", fileName);
+            File tempFile = File.createTempFile("javacv_", fileName); // Changed prefix to avoid conflict
             tempFile.deleteOnExit();
             try (FileOutputStream os = new FileOutputStream(tempFile)) {
                 byte[] buffer = new byte[4096];
@@ -75,61 +76,97 @@ public class FaceDetector {
             System.err.println("Error: Face detector not properly initialized");
             return new ArrayList<>();
         }
-        Mat grayImage = new Mat();
-        if (image.channels() > 1) {
-            Imgproc.cvtColor(image, grayImage, Imgproc.COLOR_BGR2GRAY);
-        } else {
-            grayImage = image.clone();
-        }
-        Imgproc.equalizeHist(grayImage, grayImage);
-        MatOfRect faceDetections = new MatOfRect();
-        faceDetector.detectMultiScale(
-                grayImage,
-                faceDetections,
-                scaleFactor,
-                minNeighbors,
-                0,
-                minFaceSize,
-                maxFaceSize
-        );
-        grayImage.release();
-        return faceDetections.toList();
+        List<Rect> facesList = new ArrayList<>();
+        try (Mat grayImage = new Mat(); RectVector faceDetections = new RectVector()) {
+            if (image.channels() > 1) {
+                opencv_imgproc.cvtColor(image, grayImage, opencv_imgproc.COLOR_BGR2GRAY);
+            } else {
+                image.copyTo(grayImage); // Use copyTo for cloning in JavaCV for Mats
+            }
+            opencv_imgproc.equalizeHist(grayImage, grayImage);
+            faceDetector.detectMultiScale(
+                    grayImage,
+                    faceDetections,
+                    scaleFactor,
+                    minNeighbors,
+                    0, // flags
+                    minFaceSize,
+                    maxFaceSize
+            );
+
+            for (long i = 0; i < faceDetections.size(); i++) {
+                facesList.add(faceDetections.get(i)); // Rect is a value type, no need to copy/retain
+            }
+        } // grayImage and faceDetections are automatically closed here
+        return facesList;
     }
 
+    /**
+     * Extracts a face from an image, optionally normalizing it.
+     *
+     * @param image The source image.
+     * @param faceRect The rectangle defining the face in the source image.
+     * @param normalize If true, the extracted face will be converted to grayscale and histogram equalized.
+     * @return A new Mat object containing the extracted (and optionally normalized) face.
+     *         The caller is responsible for calling .close() on this Mat to release native memory.
+     */
     public Mat extractFace(Mat image, Rect faceRect, boolean normalize) {
-        int margin = (int) (Math.min(faceRect.width, faceRect.height) * 0.2);
+        // Ensure margin calculation doesn't cause issues with int casting or negative values
+        int marginWidth = (int) (faceRect.width() * 0.2);
+        int marginHeight = (int) (faceRect.height() * 0.2);
+
+        // Create enlargedRect carefully, ensuring bounds are within the image
         Rect enlargedRect = new Rect(
-                Math.max(0, faceRect.x - margin / 2),
-                Math.max(0, faceRect.y - margin / 2),
-                Math.min(faceRect.width + margin, image.width() - faceRect.x),
-                Math.min(faceRect.height + margin, image.height() - faceRect.y)
+                Math.max(0, faceRect.x() - marginWidth / 2),
+                Math.max(0, faceRect.y() - marginHeight / 2),
+                Math.min(faceRect.width() + marginWidth, image.cols() - (faceRect.x() - marginWidth / 2)),
+                Math.min(faceRect.height() + marginHeight, image.rows() - (faceRect.y() - marginHeight / 2))
         );
-        Mat face = new Mat(image, enlargedRect);
-        Mat resizedFace = new Mat();
-        Size standardSize = new Size(224, 224);
-        Imgproc.resize(face, resizedFace, standardSize);
-        if (normalize) {
-            Mat grayFace = new Mat();
-            if (resizedFace.channels() > 1) {
-                Imgproc.cvtColor(resizedFace, grayFace, Imgproc.COLOR_BGR2GRAY);
-            } else {
-                grayFace = resizedFace.clone();
-                resizedFace.release();
-            }
-            Imgproc.equalizeHist(grayFace, grayFace);
-            return grayFace;
+        // Ensure width and height are positive
+        if (enlargedRect.width() <= 0 || enlargedRect.height() <= 0) {
+            // Fallback to original faceRect if enlargedRect is invalid
+            enlargedRect = faceRect;
         }
-        return resizedFace;
+
+
+        Mat returnedMat;
+
+        try (Mat face = new Mat(image, enlargedRect)) { // 'face' is temporary and created from ROI
+            Mat resizedFace = new Mat(); // Will be returned or become temporary
+            Size standardSize = new Size(224, 224);
+            opencv_imgproc.resize(face, resizedFace, standardSize);
+
+            if (normalize) {
+                Mat grayFace = new Mat(); // Will be returned
+                try {
+                    if (resizedFace.channels() > 1) {
+                        opencv_imgproc.cvtColor(resizedFace, grayFace, opencv_imgproc.COLOR_BGR2GRAY);
+                    } else {
+                        resizedFace.copyTo(grayFace); // Use copyTo for cloning
+                    }
+                    opencv_imgproc.equalizeHist(grayFace, grayFace);
+                    returnedMat = grayFace; // grayFace is now the Mat to be returned
+                } finally {
+                    resizedFace.close(); // resizedFace is temporary in this block, close it
+                }
+            } else {
+                returnedMat = resizedFace; // resizedFace is the Mat to be returned
+            }
+        } // 'face' (ROI) is automatically closed here
+
+        return returnedMat; // Caller is responsible for this Mat
     }
 
     public void drawFaceRectangles(Mat image, List<Rect> faces) {
         for (Rect face : faces) {
-            Imgproc.rectangle(
+            opencv_imgproc.rectangle(
                     image,
-                    new Point(face.x, face.y),
-                    new Point(face.x + face.width, face.y + face.height),
-                    new Scalar(0, 255, 0),
-                    2
+                    new Point(face.x(), face.y()), // Use accessors x() and y()
+                    new Point(face.x() + face.width(), face.y() + face.height()),
+                    new Scalar(0, 255, 0, 0), // Scalar for color (Blue, Green, Red, Alpha)
+                    2,
+                    opencv_imgproc.LINE_8, // lineType, e.g., LINE_8
+                    0 // shift
             );
         }
     }
